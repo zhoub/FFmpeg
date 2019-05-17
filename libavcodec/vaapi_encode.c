@@ -496,6 +496,7 @@ static int vaapi_encode_output(AVCodecContext *avctx,
                                VAAPIEncodePicture *pic, AVPacket *pkt)
 {
     VAAPIEncodeContext *ctx = avctx->priv_data;
+    size_t len, off;
     VACodedBufferSegment *buf_list, *buf;
     VAStatus vas;
     int err;
@@ -514,15 +515,27 @@ static int vaapi_encode_output(AVCodecContext *avctx,
         goto fail;
     }
 
+    // Find a bug from libva+vaapi driver, the vp8 encoder returns 2 buffers,
+    // and 2nd one is empty.
+    // Pass 1, gather the size of encoded data.
+    len = 0;
+    for (buf = buf_list; buf; buf = buf->next) {
+        len += buf->size;
+    }
+    err = av_new_packet(pkt, len);
+    if (err < 0)
+        goto fail_mapped;
+
+    // Pass 2, copy the data to packet.
+    off = 0;
     for (buf = buf_list; buf; buf = buf->next) {
         av_log(avctx, AV_LOG_DEBUG, "Output buffer: %u bytes "
                "(status %08x).\n", buf->size, buf->status);
 
-        err = av_new_packet(pkt, buf->size);
-        if (err < 0)
-            goto fail_mapped;
-
-        memcpy(pkt->data, buf->buf, buf->size);
+        if (buf->size) {
+            memcpy(pkt->data + off, buf->buf, buf->size);
+            off += buf->size;
+        }
     }
 
     if (pic->type == PICTURE_TYPE_IDR)
