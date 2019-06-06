@@ -1408,12 +1408,13 @@ static void vaapi_device_free(AVHWDeviceContext *ctx)
     AVVAAPIDeviceContext *hwctx = ctx->hwctx;
     VAAPIDevicePriv      *priv  = ctx->user_opaque;
 
-    if (hwctx->display)
-        vaTerminate(hwctx->display);
-
 #if HAVE_VAAPI_X11
-    if (priv->x11_display)
+    if (priv->x11_display) {
+        if (hwctx->display)
+            vaTerminate(hwctx->display);
+
         XCloseDisplay(priv->x11_display);
+    }
 #endif
 
     if (priv->drm_fd >= 0)
@@ -1437,16 +1438,6 @@ static void vaapi_device_log_info(void *context, const char *message)
     av_log(ctx, AV_LOG_VERBOSE, "libva: %s", message);
 }
 #endif
-
-static int vaapi_device_set(AVHWDeviceContext *ctx, VADisplay display)
-{
-    AVVAAPIDeviceContext *hwctx = ctx->hwctx;
-
-    hwctx->display = display;
-    av_log(ctx, AV_LOG_VERBOSE, "Using external VADisplay");
-
-    return 0;
-}
 
 static int vaapi_device_connect(AVHWDeviceContext *ctx,
                                 VADisplay display)
@@ -1477,7 +1468,8 @@ static int vaapi_device_connect(AVHWDeviceContext *ctx,
 static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
                                AVDictionary *opts, int flags)
 {
-    VAAPIDevicePriv *priv;
+    AVVAAPIDeviceContext *hwctx = NULL;
+    VAAPIDevicePriv *priv = NULL;
     VADisplay display = NULL;
     AVDictionaryEntry *dict_entry = NULL;
 
@@ -1496,7 +1488,10 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
     if(dict_entry) {
         display = (VADisplay)dict_entry->value;
         if (vaDisplayIsValid(display)) {
-            return vaapi_device_set(ctx, display);
+            hwctx = ctx->hwctx;
+            hwctx->display = display;
+
+            return 0;
         } else {
             display = NULL;
         }
