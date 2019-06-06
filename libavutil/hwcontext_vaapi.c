@@ -1438,6 +1438,16 @@ static void vaapi_device_log_info(void *context, const char *message)
 }
 #endif
 
+static int vaapi_device_set(AVHWDeviceContext *ctx, VADisplay display)
+{
+    AVVAAPIDeviceContext *hwctx = ctx->hwctx;
+
+    hwctx->display = display;
+    av_log(ctx, AV_LOG_VERBOSE, "Using external VADisplay");
+
+    return 0;
+}
+
 static int vaapi_device_connect(AVHWDeviceContext *ctx,
                                 VADisplay display)
 {
@@ -1469,6 +1479,7 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
 {
     VAAPIDevicePriv *priv;
     VADisplay display = NULL;
+    AVDictionaryEntry *dict_entry = NULL;
 
     priv = av_mallocz(sizeof(*priv));
     if (!priv)
@@ -1478,6 +1489,18 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
 
     ctx->user_opaque = priv;
     ctx->free        = vaapi_device_free;
+
+    // Check if there is the VADisplay from opts.
+    dict_entry = av_dict_get(opts, "VADisplay",
+                             dict_entry, AV_DICT_IGNORE_SUFFIX);
+    if(dict_entry) {
+        display = (VADisplay)dict_entry->value;
+        if (vaDisplayIsValid(display)) {
+            return vaapi_device_set(ctx, display);
+        } else {
+            display = NULL;
+        }
+    }
 
 #if HAVE_VAAPI_X11
     if (!display && !(device && device[0] == '/')) {
