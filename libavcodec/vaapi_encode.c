@@ -1982,7 +1982,7 @@ av_cold int ff_vaapi_encode_init(AVCodecContext *avctx)
 
     // This should be configurable somehow.  (Needs testing on a machine
     // where it actually overlaps properly, though.)
-    ctx->issue_mode = ISSUE_MODE_MAXIMISE_THROUGHPUT;
+    ctx->issue_mode = ISSUE_MODE_MINIMISE_LATENCY;
 
     if (ctx->va_packed_headers & VA_ENC_PACKED_HEADER_SEQUENCE &&
         ctx->codec->write_sequence_header &&

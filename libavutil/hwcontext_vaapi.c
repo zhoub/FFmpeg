@@ -460,7 +460,8 @@ static AVBufferRef *vaapi_pool_alloc(void *opaque, int size)
                "%d (%s).\n", vas, vaErrorStr(vas));
         return NULL;
     }
-    av_log(hwfc, AV_LOG_DEBUG, "Created surface %#x.\n", surface_id);
+    av_log(hwfc, AV_LOG_DEBUG, "Created surface %p for display %#x.\n",
+        hwctx->display, surface_id);
 
     ref = av_buffer_create((uint8_t*)(uintptr_t)surface_id,
                            sizeof(surface_id), &vaapi_buffer_free,
@@ -1486,10 +1487,12 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
     dict_entry = av_dict_get(opts, "VADisplay",
                              dict_entry, AV_DICT_IGNORE_SUFFIX);
     if(dict_entry) {
-        display = (VADisplay)dict_entry->value;
+        sscanf(dict_entry->value, "%p", &display);
         if (vaDisplayIsValid(display)) {
             hwctx = ctx->hwctx;
             hwctx->display = display;
+
+            av_log(ctx, AV_LOG_DEBUG, "Using external VADisplay %\n", display);
 
             return 0;
         } else {
