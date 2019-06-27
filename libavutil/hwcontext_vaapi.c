@@ -1492,7 +1492,7 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
             hwctx = ctx->hwctx;
             hwctx->display = display;
 
-            av_log(ctx, AV_LOG_DEBUG, "Using external VADisplay %\n", display);
+            av_log(ctx, AV_LOG_DEBUG, "Using external VADisplay %p\n", display);
 
             return 0;
         } else {
