@@ -217,6 +217,15 @@ static int vaapi_encode_issue(AVCodecContext *avctx,
     }
 
     if (pic->type == PICTURE_TYPE_IDR) {
+
+        // Modify the bitrate if it changed before create rate control buffer.
+        if (ctx->va_rc_mode == VA_RC_VBR &&
+            avctx->bit_rate != ctx->rc_params.rc.bits_per_second) {
+
+            av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %d\n",
+                avctx->bit_rate);
+        }
+
         for (i = 0; i < ctx->nb_global_params; i++) {
             err = vaapi_encode_make_param_buffer(avctx, pic,
                                                  VAEncMiscParameterBufferType,
@@ -225,6 +234,24 @@ static int vaapi_encode_issue(AVCodecContext *avctx,
             if (err < 0)
                 goto fail;
         }
+
+        // Apply the new bitrate.
+        VABufferID rc_buffer = pic->param_buffers[1];
+
+        VAEncMiscParameterBuffer *misc_param = NULL;
+        VAEncMiscParameterRateControl *misc_rate_ctrl = NULL;
+
+        vaMapBuffer(ctx->hwctx->display, rc_buffer, (void **)&misc_param);
+
+        misc_rate_ctrl = (VAEncMiscParameterRateControl *)misc_param->data;
+        misc_rate_ctrl->target_percentage =
+            avctx->bit_rate * 100 / ctx->rc_params.rc.bits_per_second;
+
+        av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %d%\n",
+            misc_rate_ctrl->target_percentage);
+
+        vaUnmapBuffer(ctx->hwctx->display, rc_buffer);
+        vaRenderPicture(ctx->hwctx->display, ctx->va_context, &rc_buffer, 1);
     }
 
     if (ctx->codec->init_picture_params) {
@@ -1283,6 +1310,9 @@ static av_cold int vaapi_encode_init_rate_control(AVCodecContext *avctx)
                "config attribute: %d (%s).\n", vas, vaErrorStr(vas));
         return AVERROR_EXTERNAL;
     }
+
+    av_log(avctx, AV_LOG_VERBOSE, "Rate control value is "
+           "0x%x\n", rc_attr.value);
 
     if (rc_attr.value == VA_ATTRIB_NOT_SUPPORTED) {
         av_log(avctx, AV_LOG_VERBOSE, "Driver does not report any "
