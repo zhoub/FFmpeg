@@ -217,6 +217,15 @@ static int vaapi_encode_issue(AVCodecContext *avctx,
     }
 
     if (pic->type == PICTURE_TYPE_IDR) {
+
+        // Modify the bitrate if it changed before create rate control buffer.
+        if (ctx->va_rc_mode == VA_RC_VBR &&
+            avctx->bit_rate != ctx->rc_params.rc.bits_per_second) {
+
+            av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %d\n",
+                avctx->bit_rate);
+        }
+
         for (i = 0; i < ctx->nb_global_params; i++) {
             err = vaapi_encode_make_param_buffer(avctx, pic,
                                                  VAEncMiscParameterBufferType,
@@ -225,6 +234,24 @@ static int vaapi_encode_issue(AVCodecContext *avctx,
             if (err < 0)
                 goto fail;
         }
+
+        // Apply the new bitrate.
+        VABufferID rc_buffer = pic->param_buffers[1];
+
+        VAEncMiscParameterBuffer *misc_param = NULL;
+        VAEncMiscParameterRateControl *misc_rate_ctrl = NULL;
+
+        vaMapBuffer(ctx->hwctx->display, rc_buffer, (void **)&misc_param);
+
+        misc_rate_ctrl = (VAEncMiscParameterRateControl *)misc_param->data;
+        misc_rate_ctrl->target_percentage =
+            avctx->bit_rate * 100 / ctx->rc_params.rc.bits_per_second;
+
+        av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %d%\n",
+            misc_rate_ctrl->target_percentage);
+
+        vaUnmapBuffer(ctx->hwctx->display, rc_buffer);
+        vaRenderPicture(ctx->hwctx->display, ctx->va_context, &rc_buffer, 1);
     }
 
     if (ctx->codec->init_picture_params) {
@@ -496,6 +523,7 @@ static int vaapi_encode_output(AVCodecContext *avctx,
                                VAAPIEncodePicture *pic, AVPacket *pkt)
 {
     VAAPIEncodeContext *ctx = avctx->priv_data;
+    size_t len, off;
     VACodedBufferSegment *buf_list, *buf;
     VAStatus vas;
     int err;
@@ -514,15 +542,27 @@ static int vaapi_encode_output(AVCodecContext *avctx,
         goto fail;
     }
 
+    // Find a bug from libva+vaapi driver, the vp8 encoder returns 2 buffers,
+    // and 2nd one is empty.
+    // Pass 1, gather the size of encoded data.
+    len = 0;
+    for (buf = buf_list; buf; buf = buf->next) {
+        len += buf->size;
+    }
+    err = av_new_packet(pkt, len);
+    if (err < 0)
+        goto fail_mapped;
+
+    // Pass 2, copy the data to packet.
+    off = 0;
     for (buf = buf_list; buf; buf = buf->next) {
         av_log(avctx, AV_LOG_DEBUG, "Output buffer: %u bytes "
                "(status %08x).\n", buf->size, buf->status);
 
-        err = av_new_packet(pkt, buf->size);
-        if (err < 0)
-            goto fail_mapped;
-
-        memcpy(pkt->data, buf->buf, buf->size);
+        if (buf->size) {
+            memcpy(pkt->data + off, buf->buf, buf->size);
+            off += buf->size;
+        }
     }
 
     if (pic->type == PICTURE_TYPE_IDR)
@@ -1271,6 +1311,9 @@ static av_cold int vaapi_encode_init_rate_control(AVCodecContext *avctx)
         return AVERROR_EXTERNAL;
     }
 
+    av_log(avctx, AV_LOG_VERBOSE, "Rate control value is "
+           "0x%x\n", rc_attr.value);
+
     if (rc_attr.value == VA_ATTRIB_NOT_SUPPORTED) {
         av_log(avctx, AV_LOG_VERBOSE, "Driver does not report any "
                "supported rate control modes: assuming constant-quality.\n");
@@ -1969,7 +2012,7 @@ av_cold int ff_vaapi_encode_init(AVCodecContext *avctx)
 
     // This should be configurable somehow.  (Needs testing on a machine
     // where it actually overlaps properly, though.)
-    ctx->issue_mode = ISSUE_MODE_MAXIMISE_THROUGHPUT;
+    ctx->issue_mode = ISSUE_MODE_MINIMISE_LATENCY;
 
     if (ctx->va_packed_headers & VA_ENC_PACKED_HEADER_SEQUENCE &&
         ctx->codec->write_sequence_header &&

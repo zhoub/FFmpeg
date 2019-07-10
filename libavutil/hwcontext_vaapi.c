@@ -460,7 +460,8 @@ static AVBufferRef *vaapi_pool_alloc(void *opaque, int size)
                "%d (%s).\n", vas, vaErrorStr(vas));
         return NULL;
     }
-    av_log(hwfc, AV_LOG_DEBUG, "Created surface %#x.\n", surface_id);
+    av_log(hwfc, AV_LOG_DEBUG, "Created surface %p for display %#x.\n",
+        hwctx->display, surface_id);
 
     ref = av_buffer_create((uint8_t*)(uintptr_t)surface_id,
                            sizeof(surface_id), &vaapi_buffer_free,
@@ -1408,12 +1409,13 @@ static void vaapi_device_free(AVHWDeviceContext *ctx)
     AVVAAPIDeviceContext *hwctx = ctx->hwctx;
     VAAPIDevicePriv      *priv  = ctx->user_opaque;
 
-    if (hwctx->display)
-        vaTerminate(hwctx->display);
-
 #if HAVE_VAAPI_X11
-    if (priv->x11_display)
+    if (priv->x11_display) {
+        if (hwctx->display)
+            vaTerminate(hwctx->display);
+
         XCloseDisplay(priv->x11_display);
+    }
 #endif
 
     if (priv->drm_fd >= 0)
@@ -1467,8 +1469,10 @@ static int vaapi_device_connect(AVHWDeviceContext *ctx,
 static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
                                AVDictionary *opts, int flags)
 {
-    VAAPIDevicePriv *priv;
+    AVVAAPIDeviceContext *hwctx = NULL;
+    VAAPIDevicePriv *priv = NULL;
     VADisplay display = NULL;
+    AVDictionaryEntry *dict_entry = NULL;
 
     priv = av_mallocz(sizeof(*priv));
     if (!priv)
@@ -1478,6 +1482,23 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
 
     ctx->user_opaque = priv;
     ctx->free        = vaapi_device_free;
+
+    // Check if there is the VADisplay from opts.
+    dict_entry = av_dict_get(opts, "VADisplay",
+                             dict_entry, AV_DICT_IGNORE_SUFFIX);
+    if(dict_entry) {
+        sscanf(dict_entry->value, "%p", &display);
+        if (vaDisplayIsValid(display)) {
+            hwctx = ctx->hwctx;
+            hwctx->display = display;
+
+            av_log(ctx, AV_LOG_DEBUG, "Using external VADisplay %p\n", display);
+
+            return 0;
+        } else {
+            display = NULL;
+        }
+    }
 
 #if HAVE_VAAPI_X11
     if (!display && !(device && device[0] == '/')) {
