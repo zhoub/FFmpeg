@@ -217,13 +217,16 @@ static int vaapi_encode_issue(AVCodecContext *avctx,
     }
 
     if (pic->type == PICTURE_TYPE_IDR) {
-
         // Modify the bitrate if it changed before create rate control buffer.
+        int bit_rate_changed = 0;
         if (ctx->va_rc_mode == VA_RC_VBR &&
             avctx->bit_rate != ctx->rc_params.rc.bits_per_second) {
 
-            av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %d\n",
-                avctx->bit_rate);
+            av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate from %d to %d\n",
+                   (int)(avctx->bit_rate),
+                   (int)(ctx->rc_params.rc.bits_per_second));
+
+            bit_rate_changed = 1;
         }
 
         for (i = 0; i < ctx->nb_global_params; i++) {
@@ -236,22 +239,30 @@ static int vaapi_encode_issue(AVCodecContext *avctx,
         }
 
         // Apply the new bitrate.
-        VABufferID rc_buffer = pic->param_buffers[1];
+        if (bit_rate_changed) {
+            VABufferID rc_buffer = pic->param_buffers[1];
 
-        VAEncMiscParameterBuffer *misc_param = NULL;
-        VAEncMiscParameterRateControl *misc_rate_ctrl = NULL;
+            VAEncMiscParameterBuffer *misc_param = NULL;
+            VAEncMiscParameterRateControl *misc_rate_ctrl = NULL;
 
-        vaMapBuffer(ctx->hwctx->display, rc_buffer, (void **)&misc_param);
+            vaMapBuffer(ctx->hwctx->display, rc_buffer, (void **)&misc_param);
 
-        misc_rate_ctrl = (VAEncMiscParameterRateControl *)misc_param->data;
-        misc_rate_ctrl->target_percentage =
-            avctx->bit_rate * 100 / ctx->rc_params.rc.bits_per_second;
+            misc_rate_ctrl = (VAEncMiscParameterRateControl *)misc_param->data;
 
-        av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %d%\n",
-            misc_rate_ctrl->target_percentage);
+            misc_rate_ctrl->target_percentage =
+                avctx->bit_rate * 100 / ctx->rc_params.rc.bits_per_second;
+            if (misc_rate_ctrl->target_percentage > 100)
+            {
+                misc_rate_ctrl->target_percentage = 100;
+            }
 
-        vaUnmapBuffer(ctx->hwctx->display, rc_buffer);
-        vaRenderPicture(ctx->hwctx->display, ctx->va_context, &rc_buffer, 1);
+            av_log(avctx, AV_LOG_VERBOSE, "Updated bitrate to %u of %u\n",
+                   misc_rate_ctrl->target_percentage,
+                   misc_rate_ctrl->bits_per_second);
+
+            vaUnmapBuffer(ctx->hwctx->display, rc_buffer);
+            vaRenderPicture(ctx->hwctx->display, ctx->va_context, &rc_buffer, 1);
+        }
     }
 
     if (ctx->codec->init_picture_params) {
